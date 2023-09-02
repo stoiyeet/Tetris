@@ -140,7 +140,7 @@ volatile timepoint lastPress[KeyPress::COUNT];
 volatile timepoint lastRelease[KeyPress::COUNT];
 
 bool IsKeyPressed(KeyPress::KeyPress key) {
-    return lastPress[KeyPress::Right] > lastRelease[KeyPress::Right];
+    return lastPress[key] > lastRelease[key];
 }
 
 void ContinuouslyReadInput() {
