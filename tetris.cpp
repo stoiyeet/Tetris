@@ -417,17 +417,43 @@ struct Tetris {
         return dy;
     }
 
-    void HardDrop(Tetromino& piece) {
+    void PlacePiece(Tetromino& piece) {
         // TODO: Game over
-        int8_t dy = DistanceFromFloor(piece);
         for (size_t i = 0; i < 4; ++i) {
             int8_t x = piece.GetMino(i).x;
-            int8_t y = piece.GetMino(i).y + dy;
-            if (InBounds(x, y)) {
+            int8_t y = piece.GetMino(i).y;
+            if (y >= 0 && InBounds(x, y)) {
                 board[y][x] = piece.type;
             }
         }
         piece = Tetromino{NextFromBag()};
+        ClearLines();
+    }
+
+    void HardDrop(Tetromino& piece) {
+        piece.py += DistanceFromFloor(piece);;
+        PlacePiece(piece);
+    }
+
+    void ClearLines() {
+        for (int8_t y = Height-1; y >= 0; --y) {
+            bool rowFull = true;
+            for (int8_t x = 0; x < Width; ++x) {
+                if (board[y][x] == Tetromino::Type::None) {
+                    rowFull = false;
+                    break;
+                }
+            }
+
+            if (rowFull) {
+                for (int8_t above = y; above > 0; --above) {
+                    for (int8_t x = 0; x < Width; ++x) {
+                        board[above][x] = board[above-1][x];
+                    }
+                }
+                ++y;
+            }
+        }
     }
 
     Tetromino::Type NextFromBag() {
@@ -583,8 +609,8 @@ struct Tetris {
         }
         // TODO: Hold piece
         // TODO: Next piece
-        Color minoColor = PieceColor(currentPiece.type);
         int8_t distFromFloor = DistanceFromFloor(currentPiece);
+        Color minoColor = PieceColor(currentPiece.type);
         Color ghostColor = minoColor.DimColor(127);
         for (size_t i = 0; i < 4; ++i) {
             int8_t minoX = currentPiece.GetMino(i).x + 1;
