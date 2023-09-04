@@ -13,10 +13,25 @@
 
 #include <thread>
 #include <chrono>
+#include <random>
 using namespace std::chrono_literals;
 
 #define UNREACHABLE assert(0 && "Unreachable")
 
+long randlong(long min, long max) {
+    static std::random_device rd;
+    static std::mt19937 rng(rd());
+
+    std::uniform_int_distribution<long> dist(min, max);
+    return dist(rng);
+}
+
+void ShuffleArray(auto* arr, size_t N) {
+    for (size_t i = N-1; i >= 1; --i) {
+        size_t j = static_cast<size_t>(randlong(0, static_cast<long>(i)));
+        std::swap(arr[i], arr[j]);
+    }
+}
 
 struct Color {
     constexpr static uint32_t Black = 0x000000;
@@ -133,8 +148,8 @@ void SetTerminalToRawMode() {
     // Set no echo and char buffered
     struct termios new_termios;
     memcpy(&new_termios, &original_termios, sizeof(new_termios));
-    new_termios.c_lflag &= ~ICANON;
-    new_termios.c_lflag &= ~ECHO;
+    new_termios.c_lflag &= static_cast<tcflag_t>(~ICANON);
+    new_termios.c_lflag &= static_cast<tcflag_t>(~ECHO);
     tcsetattr(0, TCSANOW, &new_termios);
 }
 
@@ -168,10 +183,10 @@ void ContinuouslyReadInput() {
 
     struct input_event events[32];
     while (true) {
-        int len;
+        ssize_t len;
         while ((len = read(keyboard_fd, events, sizeof(events))) > 0) {
             len /= sizeof(events[0]);
-            for (int i = 0; i < len; ++i) {
+            for (size_t i = 0; i < static_cast<size_t>(len); ++i) {
 
                 struct input_event *event = &events[i];
                 if (event->type == EV_KEY) {
@@ -412,13 +427,35 @@ struct Tetris {
                 board[y][x] = piece.type;
             }
         }
-        // TODO: 7-bag
-        piece = Tetromino{static_cast<Tetromino::Type>(static_cast<int>(piece.type) % static_cast<int>(Tetromino::Type::Z) + 1)};
+        piece = Tetromino{NextFromBag()};
     }
 
+    Tetromino::Type NextFromBag() {
+        typename Tetromino::Type result = pieceQueue[pieceQueueTop++];
+        if (pieceQueueTop >= 7) {
+            pieceQueueTop = 0;
+            memcpy(pieceQueue, pieceQueue+7, 7*sizeof(pieceQueue[0]));
+            for (size_t i = 7; i < 14; ++i) {
+                pieceQueue[i] = static_cast<Tetromino::Type>(i-7+1);
+            }
+            ShuffleArray(pieceQueue+7, 7);
+        }
+        return result;
+    }
 
-    Tetromino::Type board[Height][Width]{};
-    Tetromino currentPiece = Tetromino{Tetromino::Type::I};
+    Tetris() {
+        pieceQueueTop = 0;
+        for (size_t i = 0; i < 7; ++i) {
+            pieceQueue[i] = static_cast<Tetromino::Type>(i+1);
+        }
+        for (size_t i = 7; i < 14; ++i) {
+            pieceQueue[i] = static_cast<Tetromino::Type>(i-7+1);
+        }
+        ShuffleArray(pieceQueue, 7);
+        ShuffleArray(pieceQueue+7, 7);
+
+        currentPiece = Tetromino{NextFromBag()};
+    }
 
     void Update(timepoint now) {
         static timepoint lastUpdate = 0;
@@ -518,8 +555,8 @@ struct Tetris {
             HardDrop(currentPiece);
         }
 
-        int dx = rightPress - leftPress;
-        int dy = downPress;
+        int8_t dx = rightPress - leftPress;
+        int8_t dy = downPress;
         if (!PieceHitWall(currentPiece, dx, 0)) {
             currentPiece.px += dx;
         }
@@ -528,7 +565,7 @@ struct Tetris {
         }
     }
 
-    void Draw() {
+    void Draw() const {
         screen.ClearBuffer();
         for (size_t y = 0; y < screen.Height; ++y) {
             screen.SetPixel(0, y, Color::White);
@@ -546,17 +583,25 @@ struct Tetris {
         }
         // TODO: Hold piece
         // TODO: Next piece
-        int8_t distFromFloor = DistanceFromFloor(currentPiece);
         Color minoColor = PieceColor(currentPiece.type);
+        int8_t distFromFloor = DistanceFromFloor(currentPiece);
         Color ghostColor = minoColor.DimColor(127);
         for (size_t i = 0; i < 4; ++i) {
             int8_t minoX = currentPiece.GetMino(i).x + 1;
+            int8_t minoY = currentPiece.GetMino(i).y + 1 + distFromFloor;
+            screen.SetPixel(static_cast<size_t>(minoX), static_cast<size_t>(minoY), ghostColor);
+        }
+        for (size_t i = 0; i < 4; ++i) {
+            int8_t minoX = currentPiece.GetMino(i).x + 1;
             int8_t minoY = currentPiece.GetMino(i).y + 1;
-            int8_t ghostY = minoY + distFromFloor;
-            screen.SetPixel(minoX, minoY, minoColor);
-            screen.SetPixel(minoX, ghostY, ghostColor);
+            screen.SetPixel(static_cast<size_t>(minoX), static_cast<size_t>(minoY), minoColor);
         }
     }
+
+    size_t pieceQueueTop;
+    Tetromino::Type pieceQueue[14];
+    Tetromino::Type board[Height][Width]{};
+    Tetromino currentPiece;
 };
 
 int main(void) {
@@ -603,11 +648,8 @@ int main(void) {
 
 // TODO:
 //   Game over + restart
-//   DAS + ARR
-//   Ghost piece
 //   Hold piece
 //   Next piece(s)
-//   7-bag
 //   Timer
 //   Line/score counter
 //   Cross-platform (don't read from device directly)
