@@ -18,16 +18,29 @@ using namespace std::chrono_literals;
 #define UNREACHABLE assert(0 && "Unreachable")
 
 
-enum class Color : uint32_t {
-    Black = 0x000000,
-    White = 0xFFFFFF,
-    Cyan = 0x00FFFF,
-    Yellow = 0xFFFF00,
-    Pink = 0xFF00FF,
-    Orange = 0xFF7F00,
-    Blue = 0x0000FF,
-    Green = 0x00FF00,
-    Red = 0xFF0000,
+struct Color {
+    constexpr static uint32_t Black = 0x000000;
+    constexpr static uint32_t White = 0xFFFFFF;
+    constexpr static uint32_t Cyan = 0x00FFFF;
+    constexpr static uint32_t Yellow = 0xFFFF00;
+    constexpr static uint32_t Pink = 0xFF00FF;
+    constexpr static uint32_t Orange = 0xFF7F00;
+    constexpr static uint32_t Blue = 0x0000FF;
+    constexpr static uint32_t Green = 0x00FF00;
+    constexpr static uint32_t Red = 0xFF0000;
+
+    constexpr Color(uint32_t x=Black) : value{x} {}
+    constexpr operator uint32_t() const { return value; }
+
+    uint32_t value;
+
+    Color DimColor(uint8_t tint) const {
+        // This is almost definitely the wrong way to do this
+        return
+            (uint32_t(((value & 0xFF0000) >> 16) * tint / 256.0) << 16) |
+            (uint32_t(((value & 0x00FF00) >> 8) * tint / 256.0) << 8) |
+            (uint32_t(((value & 0x0000FF) >> 0) * tint / 256.0) << 0);
+    }
 };
 
 template<
@@ -87,7 +100,7 @@ struct Screen {
 
         for (size_t y = 0; y < Height*VerticalStretch; ++y) {
             for (size_t x = 0; x < Width*HorizontalStretch; ++x) {
-                uint32_t color = static_cast<uint32_t>(_buffer[x + y * Width * HorizontalStretch]);
+                uint32_t color = _buffer[x + y * Width * HorizontalStretch];
                 if (color != prevColor) {
                     SetColor(color);
                 }
@@ -380,13 +393,18 @@ struct Tetris {
         }
     }
 
-    void HardDrop(Tetromino& piece) {
-        // TODO: Game over
-        int dy = 0;
+    int8_t DistanceFromFloor(Tetromino piece) const {
+        int8_t dy = 0;
         while (!PieceHitWall(piece, 0, dy)) {
             dy += 1;
         }
         dy -= 1;
+        return dy;
+    }
+
+    void HardDrop(Tetromino& piece) {
+        // TODO: Game over
+        int8_t dy = DistanceFromFloor(piece);
         for (size_t i = 0; i < 4; ++i) {
             int8_t x = piece.GetMino(i).x;
             int8_t y = piece.GetMino(i).y + dy;
@@ -528,11 +546,15 @@ struct Tetris {
         }
         // TODO: Hold piece
         // TODO: Next piece
-        // TODO: Ghost piece
+        int8_t distFromFloor = DistanceFromFloor(currentPiece);
+        Color minoColor = PieceColor(currentPiece.type);
+        Color ghostColor = minoColor.DimColor(127);
         for (size_t i = 0; i < 4; ++i) {
             int8_t minoX = currentPiece.GetMino(i).x + 1;
             int8_t minoY = currentPiece.GetMino(i).y + 1;
-            screen.SetPixel(minoX, minoY, PieceColor(currentPiece.type));
+            int8_t ghostY = minoY + distFromFloor;
+            screen.SetPixel(minoX, minoY, minoColor);
+            screen.SetPixel(minoX, ghostY, ghostColor);
         }
     }
 };
