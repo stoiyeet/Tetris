@@ -68,12 +68,12 @@ struct Screen {
     }
 
     void ClearScreen() {
-        puts("\x1b[2J"); // Clear screen, cursor to home
+        printf("\x1b[2J"); // Clear screen, cursor to home
     }
 
     void RedrawScreen() {
         // Cursor to home, buffer
-        puts("\x1b[H");
+        printf("\x1b[H");
 
         uint32_t prevColor;
         auto SetColor = [&prevColor](uint32_t color) {
@@ -96,6 +96,9 @@ struct Screen {
             }
             putchar('\n');
         }
+
+        // Reset color
+        printf("\033[m");
     }
 };
 
@@ -129,12 +132,11 @@ void CustomExit(int) {
 
 namespace KeyPress {
     enum KeyPress : int {
-        None = 0, Left, Right, Up, Down, Space, c, COUNT,
+        None = 0, Left, Right, Up, Down, Space, c, z, r, COUNT,
     };
 }
 
-
-using timepoint = std::chrono::milliseconds::rep;
+using timepoint = std::chrono::system_clock::duration::rep;
 volatile bool keepRunning = true;
 volatile timepoint lastPress[KeyPress::COUNT];
 volatile timepoint lastRelease[KeyPress::COUNT];
@@ -163,6 +165,9 @@ void ContinuouslyReadInput() {
                     // 0 = released
                     // 1 = pressed
                     // 2 = held
+                    if (event->value == 2) {
+                        continue;
+                    }
                     bool pressed = event->value != 0;
                     timepoint now = std::chrono::system_clock::now().time_since_epoch().count();
 
@@ -173,6 +178,8 @@ void ContinuouslyReadInput() {
                         case 108: (pressed ? lastPress : lastRelease)[KeyPress::Down]  = now; break;
                         case 57:  (pressed ? lastPress : lastRelease)[KeyPress::Space] = now; break;
                         case 46:  (pressed ? lastPress : lastRelease)[KeyPress::c]     = now; break;
+                        case 19:  (pressed ? lastPress : lastRelease)[KeyPress::r]     = now; break;
+                        case 44:  (pressed ? lastPress : lastRelease)[KeyPress::z]     = now; break;
                     }
                 }
                 // Ignore all other event types
@@ -187,6 +194,8 @@ Screen screen;
 
 template<int8_t Width=10, int8_t Height=20>
 struct Tetris {
+    static constexpr auto DAS = std::chrono::system_clock::duration(133ms).count();
+    static constexpr auto ARR = std::chrono::system_clock::duration(10ms).count();
 
     struct Tetromino {
         struct Mino {
@@ -268,7 +277,7 @@ struct Tetris {
             { {-1, 0}, {-1, 0}, {-1, 0}, {-1, 0}, {-1, 0} },
         };
 
-        Mino GetMino(size_t i) {
+        Mino GetMino(size_t i) const {
             Mino mino{px, py};
             Mino diff = rotations[type][rotation][i];
             mino.x += diff.x;
@@ -278,7 +287,7 @@ struct Tetris {
 
     };
 
-    Color PieceColor(Tetromino::Type type) {
+    Color PieceColor(Tetromino::Type type) const {
         switch (type) {
             case Tetromino::Type::I: return Color::Cyan;
             case Tetromino::Type::J: return Color::Blue;
@@ -294,17 +303,17 @@ struct Tetris {
         return {};
     }
 
-    bool InBounds(int8_t x, int8_t y) {
+    bool InBounds(int8_t x, int8_t y) const {
         // NOTE: Don't check for y >= 0 here
         return y < Height && x >= 0 && x < Width;
     }
 
-    bool HitWall(int8_t x, int8_t y) {
+    bool HitWall(int8_t x, int8_t y) const {
         return !InBounds(x, y) ||
             (y >= 0 && board[y][x] != Tetromino::Type::None);
     }
 
-    bool PieceHitWall(Tetromino piece, int8_t dx = 0, int8_t dy = 0) {
+    bool PieceHitWall(Tetromino piece, int8_t dx = 0, int8_t dy = 0) const {
         for (size_t i = 0; i < 4; ++i) {
             int8_t x = piece.GetMino(i).x + dx;
             int8_t y = piece.GetMino(i).y + dy;
@@ -315,7 +324,7 @@ struct Tetris {
         return false;
     }
 
-    void Rotate(Tetromino& piece, bool clockwise) {
+    void Rotate(Tetromino& piece, bool clockwise) const {
         int8_t oldRotation = piece.rotation;
 
         if (clockwise) {
@@ -369,11 +378,10 @@ struct Tetris {
         if (!didRotate) {
             piece.rotation = oldRotation;
         }
-        assert(didRotate);
     }
 
     void HardDrop(Tetromino& piece) {
-        // TODO: Check for game over
+        // TODO: Game over
         int dy = 0;
         while (!PieceHitWall(piece, 0, dy)) {
             dy += 1;
@@ -386,6 +394,7 @@ struct Tetris {
                 board[y][x] = piece.type;
             }
         }
+        // TODO: 7-bag
         piece = Tetromino{static_cast<Tetromino::Type>(static_cast<int>(piece.type) % static_cast<int>(Tetromino::Type::Z) + 1)};
     }
 
@@ -393,26 +402,81 @@ struct Tetris {
     Tetromino::Type board[Height][Width]{};
     Tetromino currentPiece = Tetromino{Tetromino::Type::I};
 
-    void Update() {
-        bool rightPress = IsKeyPressed(KeyPress::Right);
-        bool leftPress = IsKeyPressed(KeyPress::Left);
-        bool upPress = IsKeyPressed(KeyPress::Up);
-        bool downPress = IsKeyPressed(KeyPress::Down);
-        bool rotate = IsKeyPressed(KeyPress::c);
-        bool drop = IsKeyPressed(KeyPress::Space);
+    void Update(timepoint now) {
+        static timepoint lastUpdate = 0;
 
-        static bool rotateLatch = false;
+        if (lastUpdate + ARR <= now) {
+            lastUpdate = now;
+        }
+        else {
+            return;
+        }
+
+        static bool holdLatch = false;
         static bool dropLatch = false;
+        static bool leftLatch = false;
+        static bool rightLatch = false;
+        static bool upLatch = false;
+        static bool zLatch = false;
 
-        bool rotateFirstPress = false;
-        if (rotate && !rotateLatch) {
-            rotateLatch = true;
-            rotateFirstPress = true;
+        bool right = IsKeyPressed(KeyPress::Right);
+        bool rightDAS = right && lastPress[KeyPress::Right] + DAS < now;
+        bool rightFirstPress = false;
+        if (right && !rightLatch) {
+            rightLatch = true;
+            rightFirstPress = true;
         }
-        else if (!rotate) {
-            rotateLatch = false;
+        else if (!right) {
+            rightLatch = false;
+        }
+        bool rightPress = rightFirstPress || rightDAS;
+
+        bool left = IsKeyPressed(KeyPress::Left);
+        bool leftDAS = left && lastPress[KeyPress::Left] + DAS < now;
+        bool leftFirstPress = false;
+        if (left && !leftLatch) {
+            leftLatch = true;
+            leftFirstPress = true;
+        }
+        else if (!left) {
+            leftLatch = false;
+        }
+        bool leftPress = leftFirstPress || leftDAS;
+
+
+        bool up = IsKeyPressed(KeyPress::Up);
+        bool upFirstPress = false;
+        if (up && !upLatch) {
+            upLatch = true;
+            upFirstPress = true;
+        }
+        else if (!up) {
+            upLatch = false;
         }
 
+        bool z = IsKeyPressed(KeyPress::z);
+        bool zFirstPress = false;
+        if (z && !zLatch) {
+            zLatch = true;
+            zFirstPress = true;
+        }
+        else if (!z) {
+            zLatch = false;
+        }
+
+        bool downPress = IsKeyPressed(KeyPress::Down);
+
+        bool hold = IsKeyPressed(KeyPress::c);
+        bool holdFirstPress = false;
+        if (hold && !holdLatch) {
+            holdLatch = true;
+            holdFirstPress = true;
+        }
+        else if (!hold) {
+            holdLatch = false;
+        }
+
+        bool drop = IsKeyPressed(KeyPress::Space);
         bool dropFirstPress = false;
         if (drop && !dropLatch) {
             dropLatch = true;
@@ -422,21 +486,27 @@ struct Tetris {
             dropLatch = false;
         }
 
-        if (rotateFirstPress) {
+        if (upFirstPress) {
             Rotate(currentPiece, true);
         }
-        else if (dropFirstPress) {
+        if (zFirstPress) {
+            Rotate(currentPiece, false);
+        }
+
+        (void) holdFirstPress;
+        // TODO: Hold piece
+
+        if (dropFirstPress) {
             HardDrop(currentPiece);
         }
-        else {
-            int dx = rightPress - leftPress;
-            int dy = downPress - upPress;
-            if (!PieceHitWall(currentPiece, dx, 0)) {
-                currentPiece.px += dx;
-            }
-            if (!PieceHitWall(currentPiece, 0, dy)) {
-                currentPiece.py += dy;
-            }
+
+        int dx = rightPress - leftPress;
+        int dy = downPress;
+        if (!PieceHitWall(currentPiece, dx, 0)) {
+            currentPiece.px += dx;
+        }
+        if (!PieceHitWall(currentPiece, 0, dy)) {
+            currentPiece.py += dy;
         }
     }
 
@@ -456,6 +526,8 @@ struct Tetris {
                 screen.SetPixel(x+1, y+1, PieceColor(type));
             }
         }
+        // TODO: Hold piece
+        // TODO: Next piece
         // TODO: Ghost piece
         for (size_t i = 0; i < 4; ++i) {
             int8_t minoX = currentPiece.GetMino(i).x + 1;
@@ -482,17 +554,23 @@ int main(void) {
     // This should be consistent with NES tetris
     // At 60fps, the fastest tapping should be 30hz (alternating pressing and releasing each frame)
     static constexpr size_t Framerate = 60;
-    static constexpr auto Timestep = std::chrono::microseconds(1000000 / Framerate);
+    static constexpr timepoint Timestep = 1000 / Framerate;
 
-    // Press   -> Immediately move and start DAS
-    // Tick    -> If pressed, check DAS/ARR then move if ready
-    // Release -> Stop pressing
+    timepoint lastRedraw = 0;
     while (keepRunning) {
-        game.Update();
-        game.Draw();
-        screen.RedrawScreen();
+        // TODO: Timer
+        // TODO: Score counter
 
-        std::this_thread::sleep_for(Timestep);
+        // Check time diff, if large enough redraw
+        timepoint now = std::chrono::system_clock::now().time_since_epoch().count();
+        game.Update(now);
+        if (now > lastRedraw + Timestep) {
+            game.Draw();
+            screen.RedrawScreen();
+        }
+
+        // std::this_thread::sleep_for(Timestep);
+        std::this_thread::sleep_for(1ms);
     }
 
     // If the game loop breaks somehow, clean up and exit
