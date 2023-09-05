@@ -59,8 +59,8 @@ struct Color {
 };
 
 template<
-    size_t _Width=12,
-    size_t _Height=22,
+    size_t _Width,
+    size_t _Height,
     size_t HorizontalStretch=2,
     size_t VerticalStretch=1
 >
@@ -217,8 +217,6 @@ void ContinuouslyReadInput() {
         std::this_thread::sleep_for(1ms);
     }
 }
-
-Screen screen;
 
 template<int8_t Width=10, int8_t Height=20>
 struct Tetris {
@@ -431,7 +429,7 @@ struct Tetris {
     }
 
     void HardDrop(Tetromino& piece) {
-        piece.py += DistanceFromFloor(piece);;
+        piece.py += DistanceFromFloor(piece);
         PlacePiece(piece);
     }
 
@@ -591,15 +589,15 @@ struct Tetris {
         }
     }
 
-    void Draw() const {
+    void Draw() {
         screen.ClearBuffer();
-        for (size_t y = 0; y < screen.Height; ++y) {
+        for (size_t y = 0; y <= Height+1; ++y) {
             screen.SetPixel(0, y, Color::White);
-            screen.SetPixel(screen.Width-1, y, Color::White);
+            screen.SetPixel(Width+1, y, Color::White);
         }
-        for (size_t x = 1; x < screen.Width-1; ++x) {
+        for (size_t x = 0; x <= Width+1; ++x) {
             screen.SetPixel(x, 0, Color::White);
-            screen.SetPixel(x, screen.Height-1, Color::White);
+            screen.SetPixel(x, Height+1, Color::White);
         }
         for (size_t y = 0; y < Height; ++y) {
             for (size_t x = 0; x < Width; ++x) {
@@ -608,7 +606,16 @@ struct Tetris {
             }
         }
         // TODO: Hold piece
-        // TODO: Next piece
+        for (int8_t top = 0; top < 5; ++top) {
+            Tetromino nextPiece{.type=pieceQueue[pieceQueueTop+static_cast<size_t>(top)], .rotation=0, .px=0, .py=0};
+            Color nextColor = PieceColor(nextPiece.type);
+            for (size_t i = 0; i < 4; ++i) {
+                int8_t minoX = nextPiece.GetMino(i).x + 14;
+                int8_t minoY = nextPiece.GetMino(i).y + 2 + top * 3;
+                screen.SetPixel(static_cast<size_t>(minoX), static_cast<size_t>(minoY), nextColor);
+            }
+        }
+
         int8_t distFromFloor = DistanceFromFloor(currentPiece);
         Color minoColor = PieceColor(currentPiece.type);
         Color ghostColor = minoColor.DimColor(127);
@@ -624,6 +631,7 @@ struct Tetris {
         }
     }
 
+    Screen<18, 22> screen;
     size_t pieceQueueTop;
     Tetromino::Type pieceQueue[14];
     Tetromino::Type board[Height][Width]{};
@@ -659,7 +667,7 @@ int main(void) {
         game.Update(now);
         if (now > lastRedraw + Timestep) {
             game.Draw();
-            screen.RedrawScreen();
+            game.screen.RedrawScreen();
         }
 
         // std::this_thread::sleep_for(Timestep);
@@ -675,7 +683,6 @@ int main(void) {
 // TODO:
 //   Game over + restart
 //   Hold piece
-//   Next piece(s)
 //   Timer
 //   Line/score counter
 //   Cross-platform (don't read from device directly)
