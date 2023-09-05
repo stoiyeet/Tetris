@@ -466,6 +466,9 @@ struct Tetris {
                         board[above][x] = board[above-1][x];
                     }
                 }
+                for (int8_t x = 0; x < Width; ++x) {
+                    board[0][x] = Tetromino::Type::None;
+                }
                 ++y;
             }
         }
@@ -712,7 +715,6 @@ int main(void) {
 
 // TODO:
 //   Game over + restart
-//   Hold piece
 //   Timer
 //   Line/score counter
 //   Cross-platform (don't read from device directly)
