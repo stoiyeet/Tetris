@@ -425,12 +425,29 @@ struct Tetris {
             }
         }
         piece = Tetromino{NextFromBag()};
+        alreadySwapped = false;
         ClearLines();
     }
 
-    void HardDrop(Tetromino& piece) {
-        piece.py += DistanceFromFloor(piece);
-        PlacePiece(piece);
+    void SwapHold() {
+        if (alreadySwapped) {
+            return;
+        }
+        alreadySwapped = true;
+        if (holdType == Tetromino::Type::None) {
+            holdType = currentPiece.type;
+            currentPiece = Tetromino{NextFromBag()};
+        }
+        else {
+            typename Tetromino::Type oldType = currentPiece.type;
+            currentPiece = Tetromino{holdType};
+            holdType = oldType;
+        }
+    }
+
+    void HardDrop() {
+        currentPiece.py += DistanceFromFloor(currentPiece);
+        PlacePiece(currentPiece);
     }
 
     void ClearLines() {
@@ -565,6 +582,7 @@ struct Tetris {
             dropLatch = false;
         }
 
+
         if (upFirstPress) {
             Rotate(currentPiece, true);
         }
@@ -572,11 +590,12 @@ struct Tetris {
             Rotate(currentPiece, false);
         }
 
-        (void) holdFirstPress;
-        // TODO: Hold piece
+        if (holdFirstPress) {
+            SwapHold();
+        }
 
         if (dropFirstPress) {
-            HardDrop(currentPiece);
+            HardDrop();
         }
 
         int8_t dx = rightPress - leftPress;
@@ -586,6 +605,18 @@ struct Tetris {
         }
         if (!PieceHitWall(currentPiece, 0, dy)) {
             currentPiece.py += dy;
+        }
+    }
+
+    void DrawPiece(Tetromino piece, Color color, int8_t dx, int8_t dy) {
+        if (piece.type == Tetromino::Type::None) {
+            return;
+        }
+
+        for (size_t i = 0; i < 4; ++i) {
+            int8_t minoX = piece.GetMino(i).x + dx;
+            int8_t minoY = piece.GetMino(i).y + dy;
+            screen.SetPixel(static_cast<size_t>(minoX), static_cast<size_t>(minoY), color);
         }
     }
 
@@ -605,30 +636,27 @@ struct Tetris {
                 screen.SetPixel(x+1, y+1, PieceColor(type));
             }
         }
-        // TODO: Hold piece
+
+        // Next piece queue
         for (int8_t top = 0; top < 5; ++top) {
             Tetromino nextPiece{.type=pieceQueue[pieceQueueTop+static_cast<size_t>(top)], .rotation=0, .px=0, .py=0};
             Color nextColor = PieceColor(nextPiece.type);
-            for (size_t i = 0; i < 4; ++i) {
-                int8_t minoX = nextPiece.GetMino(i).x + 14;
-                int8_t minoY = nextPiece.GetMino(i).y + 2 + top * 3;
-                screen.SetPixel(static_cast<size_t>(minoX), static_cast<size_t>(minoY), nextColor);
-            }
+            DrawPiece(nextPiece, nextColor, 14, 2 + top * 3);
         }
 
+        // Hold piece
+        Tetromino holdPiece{.type=holdType, .rotation=0, .px=0, .py=0};
+        Color holdColor = PieceColor(holdPiece.type);
+        DrawPiece(holdPiece, holdColor, 14, 20);
+
+        // Ghost piece
         int8_t distFromFloor = DistanceFromFloor(currentPiece);
         Color minoColor = PieceColor(currentPiece.type);
         Color ghostColor = minoColor.DimColor(127);
-        for (size_t i = 0; i < 4; ++i) {
-            int8_t minoX = currentPiece.GetMino(i).x + 1;
-            int8_t minoY = currentPiece.GetMino(i).y + 1 + distFromFloor;
-            screen.SetPixel(static_cast<size_t>(minoX), static_cast<size_t>(minoY), ghostColor);
-        }
-        for (size_t i = 0; i < 4; ++i) {
-            int8_t minoX = currentPiece.GetMino(i).x + 1;
-            int8_t minoY = currentPiece.GetMino(i).y + 1;
-            screen.SetPixel(static_cast<size_t>(minoX), static_cast<size_t>(minoY), minoColor);
-        }
+        DrawPiece(currentPiece, ghostColor, 1, 1 + distFromFloor);
+
+        // Current piece
+        DrawPiece(currentPiece, minoColor, 1, 1);
     }
 
     Screen<18, 22> screen;
@@ -636,6 +664,8 @@ struct Tetris {
     Tetromino::Type pieceQueue[14];
     Tetromino::Type board[Height][Width]{};
     Tetromino currentPiece;
+    Tetromino::Type holdType = Tetromino::Type::None;
+    bool alreadySwapped = false;
 };
 
 int main(void) {
