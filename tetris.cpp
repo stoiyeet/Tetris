@@ -717,5 +717,6 @@ int main(void) {
 //   Game over + restart
 //   Timer
 //   Line/score counter
-//   Cross-platform (don't read from device directly)
+//   Cross-platform (SDL layer)
+//   Online multiplayer
 
