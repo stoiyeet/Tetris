@@ -4,17 +4,15 @@
 #include <cassert>
 #include <cstring>
 #include <cstdlib>
-#include <csignal>
-
-#include <unistd.h>
-#include <fcntl.h>
-#include <termios.h>
-#include <linux/input.h>
 
 #include <thread>
 #include <chrono>
 #include <random>
 using namespace std::chrono_literals;
+
+// #include "platform_terminal_linux.hpp"
+#include "platform_sdl.hpp"
+
 
 #define UNREACHABLE assert(0 && "Unreachable")
 
@@ -33,190 +31,6 @@ void ShuffleArray(auto* arr, size_t N) {
     }
 }
 
-struct Color {
-    constexpr static uint32_t Black = 0x000000;
-    constexpr static uint32_t White = 0xFFFFFF;
-    constexpr static uint32_t Cyan = 0x00FFFF;
-    constexpr static uint32_t Yellow = 0xFFFF00;
-    constexpr static uint32_t Pink = 0xFF00FF;
-    constexpr static uint32_t Orange = 0xFF7F00;
-    constexpr static uint32_t Blue = 0x0000FF;
-    constexpr static uint32_t Green = 0x00FF00;
-    constexpr static uint32_t Red = 0xFF0000;
-
-    constexpr Color(uint32_t x=Black) : value{x} {}
-    constexpr operator uint32_t() const { return value; }
-
-    uint32_t value;
-
-    Color DimColor(uint8_t tint) const {
-        // This is almost definitely the wrong way to do this
-        return
-            (uint32_t(((value & 0xFF0000) >> 16) * tint / 256.0) << 16) |
-            (uint32_t(((value & 0x00FF00) >> 8) * tint / 256.0) << 8) |
-            (uint32_t(((value & 0x0000FF) >> 0) * tint / 256.0) << 0);
-    }
-};
-
-template<
-    size_t _Width,
-    size_t _Height,
-    size_t HorizontalStretch=2,
-    size_t VerticalStretch=1
->
-struct Screen {
-    static constexpr size_t Width = _Width;
-    static constexpr size_t Height = _Height;
-    static constexpr size_t BufferSize = Width * HorizontalStretch * Height * VerticalStretch;
-
-	Color _buffer[BufferSize];
-
-    Screen() {
-        ClearBuffer();
-        ClearScreen();
-    }
-
-    void ClearBuffer() {
-        for (size_t i = 0; i < BufferSize; ++i) {
-            _buffer[i] = Color::Black;
-        }
-    }
-
-    void SetPixel(size_t x, size_t y, Color color) {
-        if (x < Width && y < Height) {
-            for (size_t dy = 0; dy < VerticalStretch; ++dy) {
-                for (size_t dx = 0; dx < HorizontalStretch; ++dx) {
-                    size_t idx_x = x * HorizontalStretch + dx;
-                    size_t idx_y = y * VerticalStretch + dy;
-                    size_t idx_w = Width * HorizontalStretch;
-                    _buffer[idx_x + idx_y * idx_w] = color;
-                }
-            }
-        }
-    }
-
-    void ClearScreen() {
-        printf("\x1b[2J"); // Clear screen, cursor to home
-    }
-
-    void RedrawScreen() {
-        // Cursor to home, buffer
-        printf("\x1b[H");
-
-        uint32_t prevColor;
-        auto SetColor = [&prevColor](uint32_t color) {
-            printf("\x1b[48;2;%d;%d;%dm",
-                (color & 0xFF0000) >> 16,
-                (color & 0x00FF00) >> 8,
-                (color & 0x0000FF) >> 0);
-            prevColor = color;
-        };
-        SetColor(0);
-
-        for (size_t y = 0; y < Height*VerticalStretch; ++y) {
-            for (size_t x = 0; x < Width*HorizontalStretch; ++x) {
-                uint32_t color = _buffer[x + y * Width * HorizontalStretch];
-                if (color != prevColor) {
-                    SetColor(color);
-                }
-                // TODO: Coalesce prints
-                putchar(' ');
-            }
-            putchar('\n');
-        }
-
-        // Reset color
-        printf("\033[m");
-    }
-};
-
-
-struct termios original_termios;
-
-void ResetTerminalMode() {
-    tcsetattr(0, TCSANOW, &original_termios);
-    puts("\e[?25h"); // Show cursor
-}
-
-void SetTerminalToRawMode() {
-    puts("\e[?25l"); // Hide cursor
-
-    // Save original mode to restore when done
-    tcgetattr(0, &original_termios);
-    atexit(ResetTerminalMode);
-
-    // Set no echo and char buffered
-    struct termios new_termios;
-    memcpy(&new_termios, &original_termios, sizeof(new_termios));
-    new_termios.c_lflag &= static_cast<tcflag_t>(~ICANON);
-    new_termios.c_lflag &= static_cast<tcflag_t>(~ECHO);
-    tcsetattr(0, TCSANOW, &new_termios);
-}
-
-void CustomExit(int) {
-    ResetTerminalMode();
-    exit(1);
-}
-
-namespace KeyPress {
-    enum KeyPress : int {
-        None = 0, Left, Right, Up, Down, Space, c, z, r, COUNT,
-    };
-}
-
-using timepoint = std::chrono::system_clock::duration::rep;
-volatile bool keepRunning = true;
-volatile timepoint lastPress[KeyPress::COUNT];
-volatile timepoint lastRelease[KeyPress::COUNT];
-
-bool IsKeyPressed(KeyPress::KeyPress key) {
-    return lastPress[key] > lastRelease[key];
-}
-
-void ContinuouslyReadInput() {
-    // FIXME: This is bad
-    int keyboard_fd = open("/dev/input/event2", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-    if (keyboard_fd < 0) {
-        perror("Error opening device");
-        exit(1);
-    }
-
-    struct input_event events[32];
-    while (true) {
-        ssize_t len;
-        while ((len = read(keyboard_fd, events, sizeof(events))) > 0) {
-            len /= sizeof(events[0]);
-            for (size_t i = 0; i < static_cast<size_t>(len); ++i) {
-
-                struct input_event *event = &events[i];
-                if (event->type == EV_KEY) {
-                    // 0 = released
-                    // 1 = pressed
-                    // 2 = held
-                    if (event->value == 2) {
-                        continue;
-                    }
-                    bool pressed = event->value != 0;
-                    timepoint now = std::chrono::system_clock::now().time_since_epoch().count();
-
-                    switch (event->code) {
-                        case 105: (pressed ? lastPress : lastRelease)[KeyPress::Left]  = now; break;
-                        case 106: (pressed ? lastPress : lastRelease)[KeyPress::Right] = now; break;
-                        case 103: (pressed ? lastPress : lastRelease)[KeyPress::Up]    = now; break;
-                        case 108: (pressed ? lastPress : lastRelease)[KeyPress::Down]  = now; break;
-                        case 57:  (pressed ? lastPress : lastRelease)[KeyPress::Space] = now; break;
-                        case 46:  (pressed ? lastPress : lastRelease)[KeyPress::c]     = now; break;
-                        case 19:  (pressed ? lastPress : lastRelease)[KeyPress::r]     = now; break;
-                        case 44:  (pressed ? lastPress : lastRelease)[KeyPress::z]     = now; break;
-                    }
-                }
-                // Ignore all other event types
-            }
-        }
-        // Don't kill cpu
-        std::this_thread::sleep_for(1ms);
-    }
-}
 
 template<int8_t Width=10, int8_t Height=20>
 struct Tetris {
@@ -672,18 +486,10 @@ struct Tetris {
 };
 
 int main(void) {
-    // Handlers for gracefully exiting
-    struct sigaction action;
-    memset(&action, 0, sizeof(action));
-    action.sa_handler = CustomExit;
-    sigaction(SIGTERM, &action, NULL);
-    sigaction(SIGKILL, &action, NULL);
-    sigaction(SIGINT, &action, NULL);
-
-    SetTerminalToRawMode();
-    std::thread inputThread(ContinuouslyReadInput);
-
+    InitializeScreen();
     Tetris game;
+
+    std::thread inputThread(ContinuouslyReadInput);
 
     // This should be consistent with NES tetris
     // At 60fps, the fastest tapping should be 30hz (alternating pressing and releasing each frame)
@@ -709,14 +515,14 @@ int main(void) {
 
     // If the game loop breaks somehow, clean up and exit
     inputThread.join();
-    ResetTerminalMode();
-	return 0;
+    DestroyScreen();
+    return 0;
 }
 
 // TODO:
 //   Game over + restart
 //   Timer
 //   Line/score counter
-//   Cross-platform (SDL layer)
+//   Cross-platform
 //   Online multiplayer
 
