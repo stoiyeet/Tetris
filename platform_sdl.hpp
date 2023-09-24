@@ -36,6 +36,51 @@ static T* SDLCheckPtr(T* ptr, const char* file, int line) {
     return ptr;
 }
 
+static void PollEvents() {
+    for (SDL_Event e; SDL_PollEvent(&e);) {
+        switch (e.type) {
+            case SDL_QUIT: {
+                keepRunning = false;
+            } break;
+
+            case SDL_KEYDOWN:
+            case SDL_KEYUP: {
+                bool pressed = e.type == SDL_KEYDOWN;
+                SDL_Keycode code = e.key.keysym.sym;
+                // SDL_Keymod mod = static_cast<SDL_Keymod>(e.key.keysym.mod);
+
+                timepoint now = std::chrono::system_clock::now().time_since_epoch().count();
+
+                KeyPress::KeyPress key;
+                switch (code) {
+                    case SDLK_LEFT:  key = KeyPress::Left;  break;
+                    case SDLK_RIGHT: key = KeyPress::Right; break;
+                    case SDLK_UP:    key = KeyPress::Up;    break;
+                    case SDLK_DOWN:  key = KeyPress::Down;  break;
+                    case SDLK_SPACE: key = KeyPress::Space; break;
+                    case SDLK_c:     key = KeyPress::c;     break;
+                    case SDLK_r:     key = KeyPress::r;     break;
+                    case SDLK_z:     key = KeyPress::z;     break;
+                    default:         key = KeyPress::None;  break;
+                }
+
+                if (key == KeyPress::None) {
+                    break;
+                }
+
+                if (pressed) {
+                    bool isFirstPress = lastPress[key] <= lastRelease[key];
+                    if (isFirstPress) {
+                        lastPress[key] = now;
+                    }
+                }
+                else {
+                    lastRelease[key] = now;
+                }
+            } break;
+        }
+    }
+}
 
 
 static constexpr size_t Scale = 50;
@@ -70,6 +115,8 @@ void Screen<Width, Height>::ClearScreen() {
 
 template<size_t Width, size_t Height>
 void Screen<Width, Height>::RedrawScreen() {
+    PollEvents();
+
     uint32_t prevColor;
     auto SetColor = [&prevColor, this](uint32_t color) {
         SDL_SetRenderDrawColor(pimpl->renderer,
@@ -120,34 +167,7 @@ Screen<Width, Height>::~Screen() = default;
 
 void ContinuouslyReadInput() {
     while (keepRunning) {
-        for (SDL_Event e; SDL_PollEvent(&e);) {
-            switch (e.type) {
-                case SDL_QUIT: {
-                    keepRunning = false;
-                } break;
-
-                case SDL_KEYDOWN:
-                case SDL_KEYUP: {
-                    bool pressed = e.type == SDL_KEYDOWN;
-                    SDL_Keycode code = e.key.keysym.sym;
-                    // SDL_Keymod mod = static_cast<SDL_Keymod>(e.key.keysym.mod);
-
-                    timepoint now = std::chrono::system_clock::now().time_since_epoch().count();
-
-                    switch (code) {
-                        case SDLK_LEFT:  (pressed ? lastPress : lastRelease)[KeyPress::Left]  = now; break;
-                        case SDLK_RIGHT: (pressed ? lastPress : lastRelease)[KeyPress::Right] = now; break;
-                        case SDLK_UP:    (pressed ? lastPress : lastRelease)[KeyPress::Up]    = now; break;
-                        case SDLK_DOWN:  (pressed ? lastPress : lastRelease)[KeyPress::Down]  = now; break;
-                        case SDLK_SPACE: (pressed ? lastPress : lastRelease)[KeyPress::Space] = now; break;
-                        case SDLK_c:     (pressed ? lastPress : lastRelease)[KeyPress::c]     = now; break;
-                        case SDLK_r:     (pressed ? lastPress : lastRelease)[KeyPress::r]     = now; break;
-                        case SDLK_z:     (pressed ? lastPress : lastRelease)[KeyPress::z]     = now; break;
-                    }
-                } break;
-            }
-        }
-
+        PollEvents();
         // Don't kill cpu
         std::this_thread::sleep_for(1ms);
     }
