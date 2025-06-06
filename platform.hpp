@@ -67,6 +67,7 @@ public:
     void SetPixel(size_t x, size_t y, Color color);
     void ClearScreen();
     void RedrawScreen();
+    SDL_Renderer* GetRenderer() const;
 };
 
 

@@ -114,6 +114,11 @@ void Screen<Width, Height>::ClearScreen() {
 }
 
 template<size_t Width, size_t Height>
+    SDL_Renderer* Screen<Width, Height>::GetRenderer() const {
+        return pimpl->renderer;
+    }
+
+template<size_t Width, size_t Height>
 void Screen<Width, Height>::RedrawScreen() {
     PollEvents();
 
@@ -140,8 +145,6 @@ void Screen<Width, Height>::RedrawScreen() {
             SDL_RenderFillRect(pimpl->renderer, &r);
         }
     }
-
-    SDL_RenderPresent(pimpl->renderer);
 }
 
 

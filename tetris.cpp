@@ -9,6 +9,7 @@
 #include <chrono>
 #include <random>
 #include <SDL.h>
+#include <SDL_ttf.h>
 
 using namespace std::chrono_literals;
 
@@ -42,6 +43,12 @@ struct Tetris {
     static constexpr auto INITIAL_FALL_INTERVAL = std::chrono::system_clock::duration(1000ms).count(); // 1 second initially
     static constexpr auto MIN_FALL_INTERVAL = std::chrono::system_clock::duration(100ms).count(); // Maximum speed (10 blocks/sec)
     static constexpr auto TIME_TO_MAX_SPEED = std::chrono::system_clock::duration(180000ms).count(); // 3 minutes to reach max speed
+    bool alreadySwapped = false;
+    bool gameOver = false;
+    timepoint gameStartTime;
+    int level = 1;  // New: Current level (starts at 1, max 10)
+    int linesCleared = 0;  // New: Total lines cleared for level progression
+    long score = 0;  // New: Player's score
 
     struct Tetromino {
         struct Mino {
@@ -282,6 +289,9 @@ struct Tetris {
         alreadySwapped = false;
         gameOver = false;
         gameStartTime = std::chrono::system_clock::now().time_since_epoch().count();
+        level = 1;  // New: Reset level
+        linesCleared = 0;  // New: Reset lines cleared
+        score = 0;  // New: Reset score
     }
 
     void SwapHold() {
@@ -307,6 +317,7 @@ struct Tetris {
 
 
     void ClearLines() {
+        int linesThisTime = 0;  // New: Count lines cleared in this placement
         for (int8_t y = Height-1; y >= 0; --y) {
             bool rowFull = true;
             for (int8_t x = 0; x < Width; ++x) {
@@ -317,6 +328,7 @@ struct Tetris {
             }
 
             if (rowFull) {
+                linesThisTime++;
                 for (int8_t above = y; above > 0; --above) {
                     for (int8_t x = 0; x < Width; ++x) {
                         board[above][x] = board[above-1][x];
@@ -326,6 +338,16 @@ struct Tetris {
                     board[0][x] = Tetromino::Type::None;
                 }
                 ++y;
+            }
+        }
+        // New: After checking all rows, update score and level if lines were cleared
+        if (linesThisTime > 0) {
+            static const long pointsPerLine[5] = {0, 100, 300, 500, 800};  // 0-index unused; matches your spec
+            score += pointsPerLine[linesThisTime] * level;  // Award points based on lines cleared at once
+            linesCleared += linesThisTime;  // Track total lines for level progression
+            int newLevel = linesCleared / 5 + 1;  // Level up every 5 lines
+            if (newLevel > level && newLevel <= 10) {
+                level = newLevel;  // Cap at level 10
             }
         }
     }
@@ -357,6 +379,9 @@ struct Tetris {
         currentPiece = Tetromino{NextFromBag()};
         gameStartTime = std::chrono::system_clock::now().time_since_epoch().count();
         gameOver = false;
+        level = 1;  // New: Initialize level
+        linesCleared = 0;  // New: Initialize lines cleared
+        score = 0;  // New: Initialize score
     }
 
     void Update(timepoint now) {
@@ -399,16 +424,9 @@ struct Tetris {
             lastPieceY = currentPiece.py;
         }
 
-        // Calculate current fall interval based on game time
-        timepoint gameTime = now - gameStartTime;
-        timepoint currentFallInterval;
-        if (gameTime >= TIME_TO_MAX_SPEED) {
-            currentFallInterval = MIN_FALL_INTERVAL;
-        } else {
-            // Linear interpolation between initial and min fall interval
-            currentFallInterval = INITIAL_FALL_INTERVAL - 
-                ((INITIAL_FALL_INTERVAL - MIN_FALL_INTERVAL) * gameTime / TIME_TO_MAX_SPEED);
-        }
+        // Calculate current fall interval based on levels
+        timepoint currentFallInterval = INITIAL_FALL_INTERVAL -
+        ((INITIAL_FALL_INTERVAL - MIN_FALL_INTERVAL) * (level - 1) / 9);
 
         // Auto-fall logic
         if (now - lastFall >= currentFallInterval) {
@@ -603,40 +621,63 @@ struct Tetris {
 
             // Current piece
             DrawPiece(currentPiece, minoColor, 1, 1);
-        } else {
-            // Game over text
-            //Temporary Sad face for GAME OVER
-            //Consider using SDL_ttf library to create text overlay
-            screen.ClearBuffer();
-            screen.SetPixel(5, 9, Color::White);
-            screen.SetPixel(5, 8, Color::White);
-            screen.SetPixel(5, 7, Color::White);
-            screen.SetPixel(5, 6, Color::White);
-            screen.SetPixel(5, 5, Color::White);
-            screen.SetPixel(5, 4, Color::White);
-            
-            screen.SetPixel(7, 9, Color::White);
-            screen.SetPixel(7, 8, Color::White);
-            screen.SetPixel(7, 7, Color::White);
-            screen.SetPixel(7, 6, Color::White);
-            screen.SetPixel(7, 5, Color::White);
-            screen.SetPixel(7, 4, Color::White);
-
-            screen.SetPixel(3, 11, Color::White);
-            screen.SetPixel(3, 12, Color::White);
-            screen.SetPixel(4, 11, Color::White);
-            screen.SetPixel(5, 11, Color::White);
-            screen.SetPixel(6, 11, Color::White);
-            screen.SetPixel(7, 11, Color::White);
-            screen.SetPixel(8, 11, Color::White);
-            screen.SetPixel(9, 11, Color::White);
-            screen.SetPixel(9, 12, Color::White);
-
-
-
-
-
         }
+    }
+
+    // New: RenderText() method for overlaying text (score, level, game over) after pixel buffer is drawn
+    void RenderText() {
+        TTF_Font* font = TTF_OpenFont("fonts/ARCADECLASSIC.TTF", 24);
+        if (!font) {
+            fprintf(stderr, "Failed to load font: %s\n", TTF_GetError());
+            return;
+        }
+        SDL_Color white = {255, 255, 255, 255};
+
+        // Always render score
+        char scoreText[64];
+        sprintf(scoreText, "Score %ld", score);
+        SDL_Surface* surface = TTF_RenderText_Solid(font, scoreText, white);
+        SDL_Texture* texture = SDL_CreateTextureFromSurface(screen.GetRenderer(), surface);
+        int textWidth, textHeight;
+        TTF_SizeText(font, scoreText, &textWidth, &textHeight);
+        SDL_Rect destRect = {300, 50, textWidth, textHeight};  // Position to the right of the board
+        SDL_RenderCopy(screen.GetRenderer(), texture, nullptr, &destRect);
+        SDL_FreeSurface(surface);
+        SDL_DestroyTexture(texture);
+
+        // Always render level
+        char levelText[64];
+        sprintf(levelText, "Level %d", level);
+        surface = TTF_RenderText_Solid(font, levelText, white);
+        texture = SDL_CreateTextureFromSurface(screen.GetRenderer(), surface);
+        TTF_SizeText(font, levelText, &textWidth, &textHeight);
+        destRect = {300, 100, textWidth, textHeight};  // Position below score
+        SDL_RenderCopy(screen.GetRenderer(), texture, nullptr, &destRect);
+        SDL_FreeSurface(surface);
+        SDL_DestroyTexture(texture);
+
+        // If game over, overlay messages
+        if (gameOver) {
+            screen.ClearScreen();
+            surface = TTF_RenderText_Solid(font, "Game Over", white);
+            texture = SDL_CreateTextureFromSurface(screen.GetRenderer(), surface);
+            TTF_SizeText(font, "Game Over", &textWidth, &textHeight);
+            destRect = {50, 100, 300, 100};
+            SDL_RenderCopy(screen.GetRenderer(), texture, nullptr, &destRect);
+            SDL_FreeSurface(surface);
+            SDL_DestroyTexture(texture);
+
+            surface = TTF_RenderText_Solid(font, "Press   R   to   Restart", white);
+            texture = SDL_CreateTextureFromSurface(screen.GetRenderer(), surface);
+            TTF_SizeText(font, "Press   R   to   Restart", &textWidth, &textHeight);
+            destRect = {50, 200, 300, 100};
+            SDL_RenderCopy(screen.GetRenderer(), texture, nullptr, &destRect);
+            SDL_FreeSurface(surface);
+            SDL_DestroyTexture(texture);
+        }
+
+        SDL_RenderPresent(screen.GetRenderer());  // Present after all rendering
+        TTF_CloseFont(font);
     }
 
     Screen<18, 22> screen;
@@ -645,15 +686,16 @@ struct Tetris {
     Tetromino::Type board[Height][Width]{};
     Tetromino currentPiece;
     Tetromino::Type holdType = Tetromino::Type::None;
-    bool alreadySwapped = false;
-    bool gameOver = false;
-    timepoint gameStartTime;
 };
 
-int WinMain(int argc, char* argv[])
+int main(int argc, char* argv[])
 {
     (void)argc;
     (void)argv;
+    if (TTF_Init() == -1) {
+        fprintf(stderr, "TTF_Init failed: %s\n", TTF_GetError());
+        return 1;
+    }
     InitializeScreen();
     Tetris game;
 
@@ -675,6 +717,8 @@ int WinMain(int argc, char* argv[])
         if (now > lastRedraw + Timestep) {
             game.Draw();
             game.screen.RedrawScreen();
+            game.RenderText();
+            lastRedraw = now;
         }
 
         // std::this_thread::sleep_for(Timestep);
@@ -683,6 +727,7 @@ int WinMain(int argc, char* argv[])
 
     // If the game loop breaks somehow, clean up and exit
     inputThread.join();
+    TTF_Quit();
     DestroyScreen();
     return 0;
 }
