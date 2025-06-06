@@ -8,6 +8,8 @@
 #include <thread>
 #include <chrono>
 #include <random>
+#include <SDL.h>
+
 using namespace std::chrono_literals;
 
 // #include "platform_terminal_linux.hpp"
@@ -36,6 +38,10 @@ template<int8_t Width=10, int8_t Height=20>
 struct Tetris {
     static constexpr auto DAS = std::chrono::system_clock::duration(133ms).count();
     static constexpr auto ARR = std::chrono::system_clock::duration(10ms).count();
+    static constexpr auto LOCK_DELAY = std::chrono::system_clock::duration(500ms).count(); // 0.5 seconds before locking
+    static constexpr auto INITIAL_FALL_INTERVAL = std::chrono::system_clock::duration(1000ms).count(); // 1 second initially
+    static constexpr auto MIN_FALL_INTERVAL = std::chrono::system_clock::duration(100ms).count(); // Maximum speed (10 blocks/sec)
+    static constexpr auto TIME_TO_MAX_SPEED = std::chrono::system_clock::duration(180000ms).count(); // 3 minutes to reach max speed
 
     struct Tetromino {
         struct Mino {
@@ -230,7 +236,15 @@ struct Tetris {
     }
 
     void PlacePiece(Tetromino& piece) {
-        // TODO: Game over
+        // Check for game over - if any part of the piece is above the board
+        for (size_t i = 0; i < 4; ++i) {
+            int8_t y = piece.GetMino(i).y;
+            if (y < 0) {
+                gameOver = true;
+                return;
+            }
+        }
+
         for (size_t i = 0; i < 4; ++i) {
             int8_t x = piece.GetMino(i).x;
             int8_t y = piece.GetMino(i).y;
@@ -241,6 +255,33 @@ struct Tetris {
         piece = Tetromino{NextFromBag()};
         alreadySwapped = false;
         ClearLines();
+    }
+
+    void ResetGame() {
+        // Clear the board
+        for (int8_t y = 0; y < Height; ++y) {
+            for (int8_t x = 0; x < Width; ++x) {
+                board[y][x] = Tetromino::Type::None;
+            }
+        }
+
+        // Reset piece queue
+        pieceQueueTop = 0;
+        for (size_t i = 0; i < 7; ++i) {
+            pieceQueue[i] = static_cast<Tetromino::Type>(i+1);
+        }
+        for (size_t i = 7; i < 14; ++i) {
+            pieceQueue[i] = static_cast<Tetromino::Type>(i-7+1);
+        }
+        ShuffleArray(pieceQueue, 7);
+        ShuffleArray(pieceQueue+7, 7);
+
+        // Reset current piece and hold
+        currentPiece = Tetromino{NextFromBag()};
+        holdType = Tetromino::Type::None;
+        alreadySwapped = false;
+        gameOver = false;
+        gameStartTime = std::chrono::system_clock::now().time_since_epoch().count();
     }
 
     void SwapHold() {
@@ -263,6 +304,7 @@ struct Tetris {
         currentPiece.py += DistanceFromFloor(currentPiece);
         PlacePiece(currentPiece);
     }
+
 
     void ClearLines() {
         for (int8_t y = Height-1; y >= 0; --y) {
@@ -313,16 +355,78 @@ struct Tetris {
         ShuffleArray(pieceQueue+7, 7);
 
         currentPiece = Tetromino{NextFromBag()};
+        gameStartTime = std::chrono::system_clock::now().time_since_epoch().count();
+        gameOver = false;
     }
 
     void Update(timepoint now) {
         static timepoint lastUpdate = 0;
+        static timepoint lastFall = 0;
+        static timepoint lastMoved = 0;
+        static int8_t lastPieceX = -1;
+        static int8_t lastPieceY = -1;
+
+        if (gameOver) {
+            // Check for restart
+            bool restart = IsKeyPressed(KeyPress::r);
+            static bool restartLatch = false;
+            bool restartFirstPress = false;
+            if (restart && !restartLatch) {
+                restartLatch = true;
+                restartFirstPress = true;
+            } else if (!restart) {
+                restartLatch = false;
+            }
+
+            if (restartFirstPress) {
+                ResetGame();
+                lastFall = now;
+                lastMoved = now;
+            }
+            return;
+        }
 
         if (lastUpdate + ARR <= now) {
             lastUpdate = now;
-        }
-        else {
+        } else {
             return;
+        }
+
+        // Check if piece has moved
+        if (lastPieceX != currentPiece.px || lastPieceY != currentPiece.py) {
+            lastMoved = now;
+            lastPieceX = currentPiece.px;
+            lastPieceY = currentPiece.py;
+        }
+
+        // Calculate current fall interval based on game time
+        timepoint gameTime = now - gameStartTime;
+        timepoint currentFallInterval;
+        if (gameTime >= TIME_TO_MAX_SPEED) {
+            currentFallInterval = MIN_FALL_INTERVAL;
+        } else {
+            // Linear interpolation between initial and min fall interval
+            currentFallInterval = INITIAL_FALL_INTERVAL - 
+                ((INITIAL_FALL_INTERVAL - MIN_FALL_INTERVAL) * gameTime / TIME_TO_MAX_SPEED);
+        }
+
+        // Auto-fall logic
+        if (now - lastFall >= currentFallInterval) {
+            lastFall = now;
+            if (!PieceHitWall(currentPiece, 0, 1)) {
+                currentPiece.py += 1;
+                lastMoved = now; // Reset the lock timer when falling
+                lastPieceY = currentPiece.py;
+            }
+        }
+
+        // Lock delay - if piece hasn't moved for LOCK_DELAY and is on the ground
+        if (PieceHitWall(currentPiece, 0, 1) && now - lastMoved >= LOCK_DELAY) {
+            PlacePiece(currentPiece);
+            lastMoved = now;
+            lastPieceX = currentPiece.px;
+            lastPieceY = currentPiece.py;
+            lastFall = now;
         }
 
         static bool holdLatch = false;
@@ -402,26 +506,50 @@ struct Tetris {
 
         if (upFirstPress) {
             Rotate(currentPiece, true);
+            if (lastPieceX != currentPiece.px || lastPieceY != currentPiece.py) {
+                lastMoved = now;
+                lastPieceX = currentPiece.px;
+                lastPieceY = currentPiece.py;
+            }
         }
         if (zFirstPress) {
             Rotate(currentPiece, false);
+            if (lastPieceX != currentPiece.px || lastPieceY != currentPiece.py) {
+                lastMoved = now;
+                lastPieceX = currentPiece.px;
+                lastPieceY = currentPiece.py;
+            }
         }
 
         if (holdFirstPress) {
             SwapHold();
+            lastMoved = now;
+            lastPieceX = currentPiece.px;
+            lastPieceY = currentPiece.py;
         }
 
         if (dropFirstPress) {
             HardDrop();
+            lastMoved = now;
+            lastPieceX = currentPiece.px;
+            lastPieceY = currentPiece.py;
         }
 
         int8_t dx = rightPress - leftPress;
         int8_t dy = downPress;
         if (!PieceHitWall(currentPiece, dx, 0)) {
             currentPiece.px += dx;
+            if (dx != 0) {
+                lastMoved = now;
+                lastPieceX = currentPiece.px;
+            }
         }
         if (!PieceHitWall(currentPiece, 0, dy)) {
             currentPiece.py += dy;
+            if (dy != 0) {
+                lastMoved = now;
+                lastPieceY = currentPiece.py;
+            }
         }
     }
 
@@ -466,14 +594,49 @@ struct Tetris {
         Color holdColor = PieceColor(holdPiece.type);
         DrawPiece(holdPiece, holdColor, 14, 20);
 
-        // Ghost piece
-        int8_t distFromFloor = DistanceFromFloor(currentPiece);
-        Color minoColor = PieceColor(currentPiece.type);
-        Color ghostColor = minoColor.DimColor(127);
-        DrawPiece(currentPiece, ghostColor, 1, 1 + distFromFloor);
+        if (!gameOver) {
+            // Ghost piece
+            int8_t distFromFloor = DistanceFromFloor(currentPiece);
+            Color minoColor = PieceColor(currentPiece.type);
+            Color ghostColor = minoColor.DimColor(127);
+            DrawPiece(currentPiece, ghostColor, 1, 1 + distFromFloor);
 
-        // Current piece
-        DrawPiece(currentPiece, minoColor, 1, 1);
+            // Current piece
+            DrawPiece(currentPiece, minoColor, 1, 1);
+        } else {
+            // Game over text
+            //Temporary Sad face for GAME OVER
+            //Consider using SDL_ttf library to create text overlay
+            screen.ClearBuffer();
+            screen.SetPixel(5, 9, Color::White);
+            screen.SetPixel(5, 8, Color::White);
+            screen.SetPixel(5, 7, Color::White);
+            screen.SetPixel(5, 6, Color::White);
+            screen.SetPixel(5, 5, Color::White);
+            screen.SetPixel(5, 4, Color::White);
+            
+            screen.SetPixel(7, 9, Color::White);
+            screen.SetPixel(7, 8, Color::White);
+            screen.SetPixel(7, 7, Color::White);
+            screen.SetPixel(7, 6, Color::White);
+            screen.SetPixel(7, 5, Color::White);
+            screen.SetPixel(7, 4, Color::White);
+
+            screen.SetPixel(3, 11, Color::White);
+            screen.SetPixel(3, 12, Color::White);
+            screen.SetPixel(4, 11, Color::White);
+            screen.SetPixel(5, 11, Color::White);
+            screen.SetPixel(6, 11, Color::White);
+            screen.SetPixel(7, 11, Color::White);
+            screen.SetPixel(8, 11, Color::White);
+            screen.SetPixel(9, 11, Color::White);
+            screen.SetPixel(9, 12, Color::White);
+
+
+
+
+
+        }
     }
 
     Screen<18, 22> screen;
@@ -483,9 +646,14 @@ struct Tetris {
     Tetromino currentPiece;
     Tetromino::Type holdType = Tetromino::Type::None;
     bool alreadySwapped = false;
+    bool gameOver = false;
+    timepoint gameStartTime;
 };
 
-int main(void) {
+int WinMain(int argc, char* argv[])
+{
+    (void)argc;
+    (void)argv;
     InitializeScreen();
     Tetris game;
 

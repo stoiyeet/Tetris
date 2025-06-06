@@ -1,13 +1,13 @@
 #pragma once
 
-#include <SDL2/SDL_keycode.h>
 #include <cassert>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <SDL.h>
 
-#include <SDL2/SDL.h>
+
 
 #include "platform.hpp"
 
@@ -83,7 +83,7 @@ static void PollEvents() {
 }
 
 
-static constexpr size_t Scale = 50;
+static constexpr size_t Scale = 25;
 
 template<size_t Width, size_t Height>
 struct Screen<Width, Height>::Impl {
